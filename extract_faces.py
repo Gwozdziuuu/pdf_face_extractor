@@ -15,13 +15,16 @@ import cv2
 import fitz
 import numpy as np
 import pytesseract
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 
 MIN_AREA = 20_000
 MAX_AREA = 500_000
-MIN_RECTANGULARITY = 0.80
-OCR_SCALE = 2
-OCR_LANG = "pol+eng"
+MIN_RECTANGULARITY = 0.85
+MIN_SIDE = 100        # minimalna szerokość i wysokość regionu w px
+ASPECT_MIN = 0.6      # min stosunek width/height (nie za wąskie)
+ASPECT_MAX = 1.8      # max stosunek width/height (nie za szerokie)
+OCR_SCALE = 3
+OCR_LANG = "pol"
 TITLE_SEARCH_ABOVE = 100
 TITLE_SEARCH_INTO = 80
 MAX_TITLE_WORDS = 5
@@ -29,9 +32,11 @@ MAX_TITLE_WORDS = 5
 
 def detect_regions(np_img):
     gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
+    # autocontrast żeby podbić jasne/słabe ramki przed detekcją krawędzi
+    gray = cv2.equalizeHist(gray)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blurred, 30, 100)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges = cv2.Canny(blurred, 10, 50)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
     closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
     contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     h_img, w_img = np_img.shape[:2]
@@ -43,6 +48,10 @@ def detect_regions(np_img):
             continue
         x, y, bw, bh = cv2.boundingRect(cnt)
         if x < 5 or y < 5 or (x + bw) > w_img - 5 or (y + bh) > h_img - 5:
+            continue
+        if bw < MIN_SIDE or bh < MIN_SIDE:
+            continue
+        if not (ASPECT_MIN <= bw / bh <= ASPECT_MAX):
             continue
         if area / (bw * bh) < MIN_RECTANGULARITY:
             continue
@@ -61,7 +70,9 @@ def detect_regions(np_img):
 
 def ocr_full_image(pil_img):
     big = pil_img.resize((pil_img.width * OCR_SCALE, pil_img.height * OCR_SCALE), Image.LANCZOS)
-    data = pytesseract.image_to_data(big, lang=OCR_LANG, output_type=pytesseract.Output.DICT)
+    big = ImageOps.autocontrast(big)
+    big = big.filter(ImageFilter.SHARPEN)
+    data = pytesseract.image_to_data(big, lang=OCR_LANG, config="--psm 6", output_type=pytesseract.Output.DICT)
 
     lines = defaultdict(lambda: {"words": [], "tops": [], "bottoms": []})
     for i in range(len(data["text"])):
@@ -101,16 +112,25 @@ def find_title(lines, img_y):
 
     best = min(candidates, key=lambda l: abs(l["y_top"] - img_y))
     title = best["text"].strip()
-    return re.sub(r'[\\/*?:"<>|]', "", title)
+    title = re.sub(r'[\\/*?:"<>|]', "", title)
+    # usuń artefakty OCR na początku: znaki specjalne i pojedyncze litery
+    title = re.sub(r'^[\W\d_]+', "", title).strip()
+    title = re.sub(r'^[a-zA-Z]\s+', "", title).strip()
+    return title if title else "nieznany"
 
 
 def process_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     results = []
+    seen_xrefs = set()
 
     for page_num in range(len(doc)):
         for img_ref in doc[page_num].get_images():
             xref = img_ref[0]
+            if xref in seen_xrefs:
+                continue
+            seen_xrefs.add(xref)
+
             raw = doc.extract_image(xref)
             img_bytes = raw["image"]
 
