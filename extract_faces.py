@@ -23,7 +23,7 @@ MIN_RECTANGULARITY = 0.85
 MIN_SIDE = 100        # minimalna szerokość i wysokość regionu w px
 ASPECT_MIN = 0.6      # min stosunek width/height (nie za wąskie)
 ASPECT_MAX = 1.8      # max stosunek width/height (nie za szerokie)
-OCR_SCALE = 3
+OCR_SCALE = 2
 OCR_LANG = "pol"
 TITLE_SEARCH_ABOVE = 100
 TITLE_SEARCH_INTO = 80
@@ -113,9 +113,9 @@ def find_title(lines, img_y):
     best = min(candidates, key=lambda l: abs(l["y_top"] - img_y))
     title = best["text"].strip()
     title = re.sub(r'[\\/*?:"<>|]', "", title)
-    # usuń artefakty OCR na początku: znaki specjalne i pojedyncze litery
+    # usuń artefakty OCR: znaki specjalne, cyfry, wielkie-literowe prefiksy i pojedyncze litery
     title = re.sub(r'^[\W\d_]+', "", title).strip()
-    title = re.sub(r'^[a-zA-Z]\s+', "", title).strip()
+    title = re.sub(r'^([A-ZĄĆĘŁŃÓŚŹŻ]+|[a-ząćęłńóśźż])\s+', "", title).strip()
     return title if title else "nieznany"
 
 
